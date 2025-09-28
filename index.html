@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cracker Bake Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* bg-gray-900 */
+            color: #f9fafb; /* text-gray-50 */
+        }
+        .file-input-button {
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+        }
+        .file-input-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        #results-section, #calibration-section {
+            display: none;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #4b5563; /* bg-gray-600 */
+            border-radius: 5px;
+            outline: none;
+            opacity: 0.7;
+            transition: opacity .2s;
+        }
+        input[type="range"]:hover {
+            opacity: 1;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #14b8a6; /* bg-teal-500 */
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #14b8a6; /* bg-teal-500 */
+            cursor: pointer;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-xl mx-auto p-8 bg-gray-800 rounded-2xl shadow-2xl space-y-6">
+        <div class="text-center">
+            <h1 class="text-3xl font-bold text-teal-400">Cracker Bake Distribution</h1>
+            <p class="text-gray-400 mt-2">Analyze the percentage of each bake level on your cracker.</p>
+        </div>
+
+        <!-- File Upload -->
+        <div>
+            <label for="crackerUpload" class="file-input-button w-full text-center bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 px-4 rounded-lg block">
+                Upload Cracker Image
+            </label>
+            <input type="file" id="crackerUpload" class="hidden" accept="image/*">
+        </div>
+
+        <!-- Image Preview -->
+        <div id="image-preview-container" class="mt-4 text-center hidden">
+             <img id="imagePreview" src="#" alt="Image Preview" class="max-w-xs h-auto mx-auto rounded-lg shadow-md"/>
+        </div>
+
+        <!-- Calibration Section -->
+        <div id="calibration-section" class="pt-4 space-y-4">
+            <h2 class="text-xl font-semibold text-center mb-2">Adjust Bake Thresholds (by Lightness)</h2>
+            <div class="grid grid-cols-1 gap-4">
+                <div>
+                    <label for="burnt-slider" class="flex justify-between items-center text-sm font-medium text-gray-300">
+                        <span>Burnt</span>
+                        <div class="flex items-center gap-2">
+                            <span id="burnt-swatch" class="w-5 h-5 rounded border border-gray-500"></span>
+                            <span id="burnt-value">20</span>
+                        </div>
+                    </label>
+                    <input type="range" id="burnt-slider" min="0" max="100" value="20" class="w-full">
+                </div>
+                <div>
+                    <label for="overbaked-slider" class="flex justify-between items-center text-sm font-medium text-gray-300">
+                        <span>Overbaked</span>
+                        <div class="flex items-center gap-2">
+                            <span id="overbaked-swatch" class="w-5 h-5 rounded border border-gray-500"></span>
+                            <span id="overbaked-value">40</span>
+                        </div>
+                    </label>
+                    <input type="range" id="overbaked-slider" min="0" max="100" value="40" class="w-full">
+                </div>
+                <div>
+                    <label for="appropriate-slider" class="flex justify-between items-center text-sm font-medium text-gray-300">
+                        <span>Appropriately Baked</span>
+                        <div class="flex items-center gap-2">
+                            <span id="appropriate-swatch" class="w-5 h-5 rounded border border-gray-500"></span>
+                            <span id="appropriate-value">60</span>
+                        </div>
+                    </label>
+                    <input type="range" id="appropriate-slider" min="0" max="100" value="60" class="w-full">
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results-section" class="pt-4">
+            <h2 class="text-xl font-semibold text-center mb-4">Bake Analysis</h2>
+            <div class="flex flex-col md:flex-row items-center gap-6">
+                <!-- Chart -->
+                <div class="w-full md:w-1/2">
+                    <canvas id="bake-chart"></canvas>
+                </div>
+                <!-- Percentages -->
+                <div id="percentage-breakdown" class="w-full md:w-1/2 space-y-3 text-lg">
+                    <!-- Dynamic content will be inserted here -->
+                </div>
+            </div>
+            <p id="qualitative-summary" class="text-center mt-6 font-medium text-gray-300"></p>
+        </div>
+        <p id="processing-message" class="text-center text-gray-400 hidden">Analyzing image...</p>
+    </div>
+
+    <!-- Hidden canvas for image processing -->
+    <canvas id="imageCanvas" class="hidden"></canvas>
+
+    <script>
+        // DOM Elements
+        const crackerUpload = document.getElementById('crackerUpload');
+        const imagePreview = document.getElementById('imagePreview');
+        const imagePreviewContainer = document.getElementById('image-preview-container');
+        const resultsSection = document.getElementById('results-section');
+        const calibrationSection = document.getElementById('calibration-section');
+        const processingMessage = document.getElementById('processing-message');
+        const percentageBreakdownEl = document.getElementById('percentage-breakdown');
+        const qualitativeSummaryEl = document.getElementById('qualitative-summary');
+        
+        // Sliders and Value Displays
+        const burntSlider = document.getElementById('burnt-slider');
+        const overbakedSlider = document.getElementById('overbaked-slider');
+        const appropriateSlider = document.getElementById('appropriate-slider');
+        const burntValueEl = document.getElementById('burnt-value');
+        const overbakedValueEl = document.getElementById('overbaked-value');
+        const appropriateValueEl = document.getElementById('appropriate-value');
+
+        // Canvas and Chart
+        const imageCanvas = document.getElementById('imageCanvas');
+        const ctx = imageCanvas.getContext('2d', { willReadFrequently: true });
+        const chartCanvas = document.getElementById('bake-chart');
+        let bakeChart = null; // To hold the chart instance
+        let lastImageData = null; // To store image data for re-analysis
+
+        // Event Listeners
+        crackerUpload.addEventListener('change', handleImageUpload);
+        burntSlider.addEventListener('input', handleSliderChange);
+        overbakedSlider.addEventListener('input', handleSliderChange);
+        appropriateSlider.addEventListener('input', handleSliderChange);
+
+        function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = e => {
+                imagePreview.src = e.target.result;
+                imagePreviewContainer.classList.remove('hidden');
+                resultsSection.style.display = 'none';
+                calibrationSection.style.display = 'none';
+                processingMessage.classList.remove('hidden');
+                
+                setTimeout(() => {
+                    processImage(e.target.result);
+                }, 50);
+            }
+            reader.readAsDataURL(file);
+        }
+
+        function processImage(imageUrl) {
+            const img = new Image();
+            img.onload = () => {
+                imageCanvas.width = img.width;
+                imageCanvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                lastImageData = ctx.getImageData(0, 0, img.width, img.height);
+                
+                processingMessage.classList.add('hidden');
+                calibrationSection.style.display = 'block';
+                updateSwatches();
+                runAnalysis();
+            }
+            img.src = imageUrl;
+        }
+
+        function handleSliderChange() {
+            // Update value displays
+            burntValueEl.textContent = burntSlider.value;
+            overbakedValueEl.textContent = overbakedSlider.value;
+            appropriateValueEl.textContent = appropriateSlider.value;
+
+            // Smart slider logic to prevent overlap
+            if (parseInt(burntSlider.value) >= parseInt(overbakedSlider.value)) {
+                overbakedSlider.value = parseInt(burntSlider.value) + 1;
+                overbakedValueEl.textContent = overbakedSlider.value;
+            }
+            if (parseInt(overbakedSlider.value) >= parseInt(appropriateSlider.value)) {
+                appropriateSlider.value = parseInt(overbakedSlider.value) + 1;
+                appropriateValueEl.textContent = appropriateSlider.value;
+            }
+
+            updateSwatches();
+            if (lastImageData) {
+                runAnalysis();
+            }
+        }
+        
+        function runAnalysis() {
+            if (!lastImageData) return;
+            
+            const thresholds = {
+                burnt: parseInt(burntSlider.value),
+                overbaked: parseInt(overbakedSlider.value),
+                appropriate: parseInt(appropriateSlider.value)
+            };
+            
+            const analysisResult = analyzeBakeDistribution(lastImageData, thresholds);
+            displayResults(analysisResult);
+        }
+
+        function labToRgb(l, a, b) {
+            let y = (l + 16) / 116;
+            let x = a / 500 + y;
+            let z = y - b / 200;
+
+            [x, y, z] = [x, y, z].map(val => {
+                const cube = Math.pow(val, 3);
+                return cube > 0.008856 ? cube : (val - 16 / 116) / 7.787;
+            });
+
+            x *= 0.95047;
+            y *= 1.00000;
+            z *= 1.08883;
+
+            let r = x * 3.2406 + y * -1.5372 + z * -0.4986;
+            let g = x * -0.9689 + y * 1.8758 + z * 0.0415;
+            let b_ = x * 0.0557 + y * -0.2040 + z * 1.0570;
+
+            [r, g, b_] = [r, g, b_].map(val => {
+                return val > 0.0031308 ? 1.055 * Math.pow(val, 1 / 2.4) - 0.055 : 12.92 * val;
+            });
+            
+            const clamp = (val) => Math.max(0, Math.min(255, Math.round(val * 255)));
+            return `rgb(${clamp(r)}, ${clamp(g)}, ${clamp(b_)})`;
+        }
+
+        function updateSwatches() {
+            // We use a=10, b=20 to give the swatch a slightly brown/yellow tint
+            // instead of a pure gray, which is more representative of a cracker.
+            document.getElementById('burnt-swatch').style.backgroundColor = labToRgb(parseInt(burntSlider.value), 10, 20);
+            document.getElementById('overbaked-swatch').style.backgroundColor = labToRgb(parseInt(overbakedSlider.value), 10, 20);
+            document.getElementById('appropriate-swatch').style.backgroundColor = labToRgb(parseInt(appropriateSlider.value), 10, 20);
+        }
+
+        function rgbToLab(r, g, b) {
+            r /= 255; g /= 255; b /= 255;
+            r = (r > 0.04045) ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
+            g = (g > 0.04045) ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
+            b = (b > 0.04045) ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
+            let x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047;
+            let y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 1.00000;
+            let z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883;
+            x = (x > 0.008856) ? Math.pow(x, 1/3) : (7.787 * x) + 16/116;
+            y = (y > 0.008856) ? Math.pow(y, 1/3) : (7.787 * y) + 16/116;
+            z = (z > 0.008856) ? Math.pow(z, 1/3) : (7.787 * z) + 16/116;
+            return { l: (116 * y) - 16, a: 500 * (x - y), b: 200 * (y - z) };
+        }
+
+        function analyzeBakeDistribution(imageData, thresholds) {
+            const data = imageData.data;
+            let pixelCounts = { burnt: 0, overbaked: 0, appropriate: 0, underbaked: 0 };
+            let totalCrackerPixels = 0;
+
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i], g = data[i+1], b = data[i+2];
+                if (r < 240 || g < 240 || b < 240) {
+                    totalCrackerPixels++;
+                    const lightness = rgbToLab(r, g, b).l;
+                    
+                    if (lightness < thresholds.burnt) {
+                        pixelCounts.burnt++;
+                    } else if (lightness < thresholds.overbaked) {
+                        pixelCounts.overbaked++;
+                    } else if (lightness < thresholds.appropriate) {
+                        pixelCounts.appropriate++;
+                    } else {
+                        pixelCounts.underbaked++;
+                    }
+                }
+            }
+
+            if (totalCrackerPixels === 0) return { burnt: 0, overbaked: 0, appropriate: 0, underbaked: 0 };
+
+            return {
+                burnt: (pixelCounts.burnt / totalCrackerPixels) * 100,
+                overbaked: (pixelCounts.overbaked / totalCrackerPixels) * 100,
+                appropriate: (pixelCounts.appropriate / totalCrackerPixels) * 100,
+                underbaked: (pixelCounts.underbaked / totalCrackerPixels) * 100,
+            };
+        }
+        
+        function displayResults(result) {
+            resultsSection.style.display = 'block';
+
+            const data = {
+                labels: ['Burnt', 'Overbaked', 'Appropriately Baked', 'Underbaked'],
+                datasets: [{
+                    data: [result.burnt, result.overbaked, result.appropriate, result.underbaked],
+                    backgroundColor: ['#1f2937', '#854d0e', '#f59e0b', '#fef3c7'],
+                    borderColor: '#374151',
+                    borderWidth: 2,
+                    hoverOffset: 4
+                }]
+            };
+
+            if (bakeChart) {
+                bakeChart.destroy();
+            }
+
+            bakeChart = new Chart(chartCanvas, {
+                type: 'doughnut',
+                data: data,
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                color: '#d1d5db' // text-gray-300
+                            }
+                        }
+                    }
+                }
+            });
+
+            const format = (label, value, color, text) => `
+                <div class="flex items-center justify-between p-2 rounded-md" style="background-color: ${color}; color: ${text};">
+                    <span class="font-semibold">${label}</span>
+                    <span class="font-bold">${value.toFixed(1)}%</span>
+                </div>`;
+            
+            percentageBreakdownEl.innerHTML = 
+                format('Burnt', result.burnt, '#1f2937', '#f9fafb') +
+                format('Overbaked', result.overbaked, '#854d0e', '#f9fafb') +
+                format('Appropriately Baked', result.appropriate, '#f59e0b', '#1f2937') +
+                format('Underbaked', result.underbaked, '#fef3c7', '#1f2937');
+            
+            let summary = 'Analysis complete.';
+            if (result.burnt > 2) {
+                summary = "High level of burnt area detected. Recommend review.";
+            } else if (result.overbaked > 15) {
+                summary = "Cracker is significantly overbaked in some areas.";
+            } else if (result.underbaked > 20) {
+                summary = "A large portion of the cracker is underbaked.";
+            } else if (result.appropriate > 70) {
+                summary = "Excellent bake consistency and distribution.";
+            }
+            qualitativeSummaryEl.textContent = summary;
+        }
+    </script>
+</body>
+</html>
+
