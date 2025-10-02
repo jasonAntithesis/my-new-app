@@ -245,15 +245,34 @@
         }
 
         function capturePhoto() {
+            const videoWidth = cameraVideo.videoWidth;
+            const videoHeight = cameraVideo.videoHeight;
+
+            // Crop to the center square, matching the 75% overlay
+            const cropSize = Math.min(videoWidth, videoHeight) * 0.75;
+            const sx = (videoWidth - cropSize) / 2;
+            const sy = (videoHeight - cropSize) / 2;
+
             const tempCanvas = document.createElement('canvas');
             const tempCtx = tempCanvas.getContext('2d');
-            tempCanvas.width = cameraVideo.videoWidth;
-            tempCanvas.height = cameraVideo.videoHeight;
+            
+            tempCanvas.width = cropSize;
+            tempCanvas.height = cropSize;
+
             if (cameraVideo.style.transform === 'scaleX(-1)') {
                 tempCtx.translate(tempCanvas.width, 0);
                 tempCtx.scale(-1, 1);
             }
-            tempCtx.drawImage(cameraVideo, 0, 0, tempCanvas.width, tempCanvas.height);
+            
+            // Draw the cropped portion of the video
+            tempCtx.drawImage(
+                cameraVideo,
+                sx, sy,             // Source x, y
+                cropSize, cropSize, // Source width, height
+                0, 0,               // Destination x, y
+                cropSize, cropSize  // Destination width, height
+            );
+
             const imageDataUrl = tempCanvas.toDataURL('image/png');
             handleImageSrc(imageDataUrl);
             closeCamera();
@@ -281,8 +300,9 @@
         function processImage(imageUrl) {
             const img = new Image();
             img.onload = () => {
+                // The image is already cropped, so we use its full dimensions
                 const maxDim = 400;
-                const scale = Math.min(maxDim / img.width, maxDim / img.height);
+                const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
                 imageCanvas.width = img.width * scale;
                 imageCanvas.height = img.height * scale;
                 ctx.drawImage(img, 0, 0, imageCanvas.width, imageCanvas.height);
@@ -381,7 +401,7 @@
             const { data, width, height } = imageData;
             const backgroundMask = new Uint8Array(width * height).fill(0);
             const q = [];
-            const tolerance = 45;
+            const tolerance = 60;
 
             const getColor = (x, y) => [data[(y*width+x)*4], data[(y*width+x)*4+1], data[(y*width+x)*4+2]];
             const colorDist = (c1, c2) => Math.sqrt((c1[0]-c2[0])**2 + (c1[1]-c2[1])**2 + (c1[2]-c2[2])**2);
