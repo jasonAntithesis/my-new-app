@@ -18,7 +18,7 @@
             transition: all 0.2s ease-in-out;
         }
         .file-input-button:hover {
-            transform: translateY(-px);
+            transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
         #results-section, #calibration-section {
@@ -54,6 +54,12 @@
             cursor: pointer;
             border-radius: 50%;
         }
+        #camera-modal {
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+        #camera-video {
+            transform: scaleX(-1); /* Mirror mode for user-facing camera */
+        }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
@@ -64,18 +70,26 @@
             <p class="text-gray-400 mt-2">Analyze the percentage of each bake level on your cracker.</p>
         </div>
 
-        <!-- File Upload -->
+        <!-- Main Action Button -->
         <div>
-            <label for="crackerUpload" class="file-input-button w-full text-center bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 px-4 rounded-lg block">
-                Upload Cracker Image
-            </label>
+            <button id="camera-button" class="file-input-button w-full text-center bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 px-4 rounded-lg block">
+                Take Picture of Cracker
+            </button>
             <input type="file" id="crackerUpload" class="hidden" accept="image/*">
         </div>
 
-        <!-- Image Preview -->
-        <div id="image-preview-container" class="mt-4 text-center hidden">
-             <img id="imagePreview" src="#" alt="Image Preview" class="max-w-xs h-auto mx-auto rounded-lg shadow-md"/>
+        <!-- Image Previews -->
+        <div id="preview-section" class="hidden mt-4 grid grid-cols-2 gap-4 items-center">
+            <div class="text-center">
+                <h3 class="text-sm font-semibold text-gray-400 mb-2">Original</h3>
+                <img id="imagePreview" src="#" alt="Image Preview" class="max-w-full h-auto mx-auto rounded-lg shadow-md"/>
+            </div>
+            <div class="text-center">
+                <h3 class="text-sm font-semibold text-gray-400 mb-2">Analyzed Pixels</h3>
+                <img id="segmentedPreview" src="#" alt="Segmented Preview" class="max-w-full h-auto mx-auto rounded-lg shadow-md"/>
+            </div>
         </div>
+
 
         <!-- Calibration Section -->
         <div id="calibration-section" class="pt-4 space-y-4">
@@ -130,6 +144,19 @@
             <p id="qualitative-summary" class="text-center mt-6 font-medium text-gray-300"></p>
         </div>
         <p id="processing-message" class="text-center text-gray-400 hidden">Analyzing image...</p>
+        <p id="error-message" class="text-center text-red-400 hidden"></p>
+    </div>
+
+    <!-- Camera Modal -->
+    <div id="camera-modal" class="fixed inset-0 z-50 flex-col items-center justify-center hidden">
+         <div class="relative w-full max-w-lg">
+            <video id="camera-video" class="w-full h-auto rounded-lg" autoplay playsinline></video>
+            <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div class="w-3/4 aspect-square border-4 border-dashed border-white/70 rounded-lg"></div>
+            </div>
+        </div>
+        <button id="capture-button" class="mt-4 bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 px-6 rounded-full text-lg">Capture</button>
+        <button id="close-camera" class="absolute top-4 right-4 text-white text-3xl">&times;</button>
     </div>
 
     <!-- Hidden canvas for image processing -->
@@ -137,12 +164,15 @@
 
     <script>
         // DOM Elements
+        const cameraButton = document.getElementById('camera-button');
         const crackerUpload = document.getElementById('crackerUpload');
+        const previewSection = document.getElementById('preview-section');
         const imagePreview = document.getElementById('imagePreview');
-        const imagePreviewContainer = document.getElementById('image-preview-container');
+        const segmentedPreview = document.getElementById('segmentedPreview');
         const resultsSection = document.getElementById('results-section');
         const calibrationSection = document.getElementById('calibration-section');
         const processingMessage = document.getElementById('processing-message');
+        const errorMessage = document.getElementById('error-message');
         const percentageBreakdownEl = document.getElementById('percentage-breakdown');
         const qualitativeSummaryEl = document.getElementById('qualitative-summary');
         
@@ -154,6 +184,13 @@
         const overbakedValueEl = document.getElementById('overbaked-value');
         const appropriateValueEl = document.getElementById('appropriate-value');
 
+        // Camera Modal Elements
+        const cameraModal = document.getElementById('camera-modal');
+        const cameraVideo = document.getElementById('camera-video');
+        const captureButton = document.getElementById('capture-button');
+        const closeCameraButton = document.getElementById('close-camera');
+        let stream = null;
+
         // Canvas and Chart
         const imageCanvas = document.getElementById('imageCanvas');
         const ctx = imageCanvas.getContext('2d', { willReadFrequently: true });
@@ -162,65 +199,113 @@
         let lastImageData = null; // To store image data for re-analysis
 
         // Event Listeners
+        cameraButton.addEventListener('click', openCamera);
         crackerUpload.addEventListener('change', handleImageUpload);
+        captureButton.addEventListener('click', capturePhoto);
+        closeCameraButton.addEventListener('click', closeCamera);
         burntSlider.addEventListener('input', handleSliderChange);
         overbakedSlider.addEventListener('input', handleSliderChange);
         appropriateSlider.addEventListener('input', handleSliderChange);
+
+        async function openCamera() {
+            if ('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices) {
+                try {
+                    const constraints = { video: { facingMode: 'environment' } };
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    cameraVideo.srcObject = stream;
+                    cameraVideo.style.transform = 'none'; // Rear camera doesn't need mirroring
+                    cameraModal.classList.remove('hidden');
+                    cameraModal.classList.add('flex');
+                } catch (err) {
+                    console.error("Could not access environment camera:", err);
+                    try {
+                        const constraints = { video: { facingMode: 'user' } };
+                        stream = await navigator.mediaDevices.getUserMedia(constraints);
+                        cameraVideo.srcObject = stream;
+                        cameraVideo.style.transform = 'scaleX(-1)'; // Mirror front camera
+                        cameraModal.classList.remove('hidden');
+                        cameraModal.classList.add('flex');
+                    } catch (userErr) {
+                         console.error("Could not access any camera, falling back to file input.", userErr);
+                         crackerUpload.click();
+                    }
+                }
+            } else {
+                console.log("Camera API not supported, falling back to file input.");
+                crackerUpload.click();
+            }
+        }
+        
+        function closeCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            cameraModal.classList.add('hidden');
+            cameraModal.classList.remove('flex');
+        }
+
+        function capturePhoto() {
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCanvas.width = cameraVideo.videoWidth;
+            tempCanvas.height = cameraVideo.videoHeight;
+            if (cameraVideo.style.transform === 'scaleX(-1)') {
+                tempCtx.translate(tempCanvas.width, 0);
+                tempCtx.scale(-1, 1);
+            }
+            tempCtx.drawImage(cameraVideo, 0, 0, tempCanvas.width, tempCanvas.height);
+            const imageDataUrl = tempCanvas.toDataURL('image/png');
+            handleImageSrc(imageDataUrl);
+            closeCamera();
+        }
 
         function handleImageUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
             const reader = new FileReader();
-            reader.onload = e => {
-                imagePreview.src = e.target.result;
-                imagePreviewContainer.classList.remove('hidden');
-                resultsSection.style.display = 'none';
-                calibrationSection.style.display = 'none';
-                processingMessage.classList.remove('hidden');
-                
-                setTimeout(() => {
-                    processImage(e.target.result);
-                }, 50);
-            }
+            reader.onload = e => handleImageSrc(e.target.result);
             reader.readAsDataURL(file);
+        }
+
+        function handleImageSrc(src) {
+            imagePreview.src = src;
+            previewSection.classList.remove('hidden');
+            segmentedPreview.src = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="; // blank image
+            resultsSection.style.display = 'none';
+            calibrationSection.style.display = 'none';
+            errorMessage.classList.add('hidden');
+            processingMessage.classList.remove('hidden');
+            setTimeout(() => processImage(src), 50);
         }
 
         function processImage(imageUrl) {
             const img = new Image();
             img.onload = () => {
-                imageCanvas.width = img.width;
-                imageCanvas.height = img.height;
-                ctx.drawImage(img, 0, 0);
-                lastImageData = ctx.getImageData(0, 0, img.width, img.height);
+                const maxDim = 400;
+                const scale = Math.min(maxDim / img.width, maxDim / img.height);
+                imageCanvas.width = img.width * scale;
+                imageCanvas.height = img.height * scale;
+                ctx.drawImage(img, 0, 0, imageCanvas.width, imageCanvas.height);
+                lastImageData = ctx.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
                 
                 processingMessage.classList.add('hidden');
-                calibrationSection.style.display = 'block';
-                updateSwatches();
                 runAnalysis();
-            }
+            };
             img.src = imageUrl;
         }
 
         function handleSliderChange() {
-            // Update value displays
-            burntValueEl.textContent = burntSlider.value;
-            overbakedValueEl.textContent = overbakedSlider.value;
-            appropriateValueEl.textContent = appropriateSlider.value;
-
-            // Smart slider logic to prevent overlap
             if (parseInt(burntSlider.value) >= parseInt(overbakedSlider.value)) {
                 overbakedSlider.value = parseInt(burntSlider.value) + 1;
-                overbakedValueEl.textContent = overbakedSlider.value;
             }
             if (parseInt(overbakedSlider.value) >= parseInt(appropriateSlider.value)) {
                 appropriateSlider.value = parseInt(appropriateSlider.value) + 1;
-                appropriateValueEl.textContent = appropriateSlider.value;
             }
-
+            burntValueEl.textContent = burntSlider.value;
+            overbakedValueEl.textContent = overbakedSlider.value;
+            appropriateValueEl.textContent = appropriateSlider.value;
             updateSwatches();
-            if (lastImageData) {
-                runAnalysis();
-            }
+            if (lastImageData) runAnalysis();
         }
         
         function runAnalysis() {
@@ -233,97 +318,153 @@
             };
             
             const analysisResult = analyzeBakeDistribution(lastImageData, thresholds);
-            displayResults(analysisResult, thresholds);
+
+            if (analysisResult.error) {
+                errorMessage.textContent = analysisResult.error;
+                errorMessage.classList.remove('hidden');
+                resultsSection.style.display = 'none';
+                calibrationSection.style.display = 'none';
+                segmentedPreview.src = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+            } else {
+                errorMessage.classList.add('hidden');
+                calibrationSection.style.display = 'block';
+                displayResults(analysisResult, thresholds);
+            }
         }
 
+        // --- Color Conversion Functions ---
         function labToRgb(l, a, b) {
-            let y = (l + 16) / 116;
-            let x = a / 500 + y;
-            let z = y - b / 200;
-
-            [x, y, z] = [x, y, z].map(val => {
-                const cube = Math.pow(val, 3);
-                return cube > 0.008856 ? cube : (val - 16 / 116) / 7.787;
-            });
-
-            x *= 0.95047;
-            y *= 1.00000;
-            z *= 1.08883;
-
-            let r = x * 3.2406 + y * -1.5372 + z * -0.4986;
-            let g = x * -0.9689 + y * 1.8758 + z * 0.0415;
-            let b_ = x * 0.0557 + y * -0.2040 + z * 1.0570;
-
-            [r, g, b_] = [r, g, b_].map(val => {
-                return val > 0.0031308 ? 1.055 * Math.pow(val, 1 / 2.4) - 0.055 : 12.92 * val;
-            });
-            
-            const clamp = (val) => Math.max(0, Math.min(255, Math.round(val * 255)));
-            return `rgb(${clamp(r)}, ${clamp(g)}, ${clamp(b_)})`;
+            let y = (l + 16) / 116, x = a / 500 + y, z = y - b / 200;
+            [x, y, z] = [x, y, z].map(v => (v**3 > 0.008856 ? v**3 : (v - 16 / 116) / 7.787));
+            x *= 0.95047; y *= 1.00000; z *= 1.08883;
+            let r = x*3.2406 + y*-1.5372 + z*-0.4986, g = x*-0.9689 + y*1.8758 + z*0.0415, b_ = x*0.0557 + y*-0.2040 + z*1.0570;
+            [r, g, b_] = [r, g, b_].map(v => 255 * (v > 0.0031308 ? 1.055 * v**(1/2.4) - 0.055 : 12.92 * v));
+            return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b_)})`;
         }
+
+        function rgbToLab(r, g, b) {
+            [r,g,b] = [r,g,b].map(v => { v/=255; return v > 0.04045 ? ((v+0.055)/1.055)**2.4 : v/12.92; });
+            let x = (r*0.4124+g*0.3576+b*0.1805)/0.95047, y = (r*0.2126+g*0.7152+b*0.0722)/1.00000, z = (r*0.0193+g*0.1192+b*0.9505)/1.08883;
+            [x,y,z] = [x,y,z].map(v => v > 0.008856 ? v**(1/3) : (7.787*v)+16/116);
+            return { l: (116*y)-16, a: 500*(x-y), b: 200*(y-z) };
+        }
+        // --- End Color Conversion ---
 
         function updateSwatches() {
-            // We use a=10, b=20 to give the swatch a slightly brown/yellow tint
-            // instead of a pure gray, which is more representative of a cracker.
             const brownTint = { a: 10, b: 20 };
             document.getElementById('burnt-swatch').style.backgroundColor = labToRgb(parseInt(burntSlider.value), brownTint.a, brownTint.b);
             document.getElementById('overbaked-swatch').style.backgroundColor = labToRgb(parseInt(overbakedSlider.value), brownTint.a, brownTint.b);
             document.getElementById('appropriate-swatch').style.backgroundColor = labToRgb(parseInt(appropriateSlider.value), brownTint.a, brownTint.b);
         }
 
-        function rgbToLab(r, g, b) {
-            r /= 255; g /= 255; b /= 255;
-            r = (r > 0.04045) ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
-            g = (g > 0.04045) ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
-            b = (b > 0.04045) ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
-            let x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047;
-            let y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 1.00000;
-            let z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883;
-            x = (x > 0.008856) ? Math.pow(x, 1/3) : (7.787 * x) + 16/116;
-            y = (y > 0.008856) ? Math.pow(y, 1/3) : (7.787 * y) + 16/116;
-            z = (z > 0.008856) ? Math.pow(z, 1/3) : (7.787 * z) + 16/116;
-            return { l: (116 * y) - 16, a: 500 * (x - y), b: 200 * (y - z) };
-        }
-
-        function analyzeBakeDistribution(imageData, thresholds) {
-            const data = imageData.data;
-            let pixelCounts = { burnt: 0, overbaked: 0, appropriate: 0, underbaked: 0 };
-            let totalCrackerPixels = 0;
-
+        function createSegmentedImage(originalImageData, backgroundMask) {
+            const { data, width, height } = originalImageData;
+            const newImageData = ctx.createImageData(width, height);
             for (let i = 0; i < data.length; i += 4) {
-                const r = data[i], g = data[i+1], b = data[i+2];
-                if (r < 240 || g < 240 || b < 240) {
-                    totalCrackerPixels++;
-                    const lightness = rgbToLab(r, g, b).l;
-                    
-                    if (lightness < thresholds.burnt) {
-                        pixelCounts.burnt++;
-                    } else if (lightness < thresholds.overbaked) {
-                        pixelCounts.overbaked++;
-                    } else if (lightness < thresholds.appropriate) {
-                        pixelCounts.appropriate++;
-                    } else {
-                        pixelCounts.underbaked++;
+                const index = i / 4;
+                if (backgroundMask[index] === 0) { // If it's a cracker pixel
+                    newImageData.data[i] = data[i];
+                    newImageData.data[i + 1] = data[i + 1];
+                    newImageData.data[i + 2] = data[i + 2];
+                    newImageData.data[i + 3] = 255;
+                } // Background pixels remain transparent
+            }
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCanvas.width = width;
+            tempCanvas.height = height;
+            tempCtx.putImageData(newImageData, 0, 0);
+            return tempCanvas.toDataURL();
+        }
+        
+        function segmentCracker(imageData) {
+            const { data, width, height } = imageData;
+            const backgroundMask = new Uint8Array(width * height).fill(0);
+            const q = [];
+            const tolerance = 45;
+
+            const getColor = (x, y) => [data[(y*width+x)*4], data[(y*width+x)*4+1], data[(y*width+x)*4+2]];
+            const colorDist = (c1, c2) => Math.sqrt((c1[0]-c2[0])**2 + (c1[1]-c2[1])**2 + (c1[2]-c2[2])**2);
+
+            const startFloodFill = (x, y) => {
+                if (backgroundMask[y*width+x] === 1) return;
+                const startColor = getColor(x,y);
+                q.push([x,y]);
+                backgroundMask[y*width+x] = 1;
+                while(q.length > 0) {
+                    const [px, py] = q.shift();
+                    [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx, dy]) => {
+                        const nx = px+dx, ny = py+dy;
+                        if (nx>=0 && nx<width && ny>=0 && ny<height && backgroundMask[ny*width+nx] === 0) {
+                            if (colorDist(startColor, getColor(nx,ny)) < tolerance) {
+                                backgroundMask[ny*width+nx] = 1;
+                                q.push([nx,ny]);
+                            }
+                        }
+                    });
+                }
+            };
+            
+            startFloodFill(0,0); startFloodFill(width-1, 0); startFloodFill(0, height-1); startFloodFill(width-1, height-1);
+            
+            const crackerPixels = [];
+            let minX=width, minY=height, maxX=0, maxY=0;
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    if (backgroundMask[y*width+x] === 0) {
+                        crackerPixels.push(getColor(x,y));
+                        minX=Math.min(minX,x); minY=Math.min(minY,y);
+                        maxX=Math.max(maxX,x); maxY=Math.max(maxY,y);
                     }
                 }
             }
+            return { crackerPixels, backgroundMask, minX, minY, maxX, maxY };
+        }
 
-            if (totalCrackerPixels === 0) return { burnt: 0, overbaked: 0, appropriate: 0, underbaked: 0 };
+
+        function analyzeBakeDistribution(imageData, thresholds) {
+            const { crackerPixels, backgroundMask, minX, minY, maxX, maxY } = segmentCracker(imageData);
+            
+            // --- Sanity Checks ---
+            if (crackerPixels.length < (imageData.width * imageData.height * 0.1)) {
+                return { error: "No cracker detected. Please try again on a plain background." };
+            }
+            const boxWidth = maxX - minX, boxHeight = maxY - minY;
+            const aspectRatio = boxWidth / boxHeight;
+            if (aspectRatio < 0.5 || aspectRatio > 2.0) {
+                return { error: "Object shape is not cracker-like. Please retake the photo."};
+            }
+            // --- End Sanity Checks ---
+
+            const segmentedImageUrl = createSegmentedImage(imageData, backgroundMask);
+            let pixelCounts = { burnt: 0, overbaked: 0, appropriate: 0, underbaked: 0 };
+
+            crackerPixels.forEach(([r, g, b]) => {
+                const lightness = rgbToLab(r, g, b).l;
+                if (lightness < thresholds.burnt) pixelCounts.burnt++;
+                else if (lightness < thresholds.overbaked) pixelCounts.overbaked++;
+                else if (lightness < thresholds.appropriate) pixelCounts.appropriate++;
+                else pixelCounts.underbaked++;
+            });
+
+            const total = crackerPixels.length;
+            if (total === 0) return { error: "Could not find cracker in image."};
 
             return {
-                burnt: (pixelCounts.burnt / totalCrackerPixels) * 100,
-                overbaked: (pixelCounts.overbaked / totalCrackerPixels) * 100,
-                appropriate: (pixelCounts.appropriate / totalCrackerPixels) * 100,
-                underbaked: (pixelCounts.underbaked / totalCrackerPixels) * 100,
+                burnt: (pixelCounts.burnt / total) * 100,
+                overbaked: (pixelCounts.overbaked / total) * 100,
+                appropriate: (pixelCounts.appropriate / total) * 100,
+                underbaked: (pixelCounts.underbaked / total) * 100,
+                segmentedImageUrl: segmentedImageUrl
             };
         }
         
         function displayResults(result, thresholds) {
             resultsSection.style.display = 'block';
+            segmentedPreview.src = result.segmentedImageUrl;
 
-            // Define colors based on slider values for the chart
             const brownTint = { a: 10, b: 20 };
-            const burntColor = labToRgb(thresholds.burnt / 2, brownTint.a, brownTint.b); // Mid-point of burnt
+            const burntColor = labToRgb(thresholds.burnt / 2, brownTint.a, brownTint.b);
             const overbakedColor = labToRgb((thresholds.burnt + thresholds.overbaked) / 2, brownTint.a, brownTint.b);
             const appropriateColor = labToRgb((thresholds.overbaked + thresholds.appropriate) / 2, brownTint.a, brownTint.b);
             const underbakedColor = labToRgb((thresholds.appropriate + 100) / 2, brownTint.a, brownTint.b);
@@ -333,44 +474,20 @@
                 datasets: [{
                     data: [result.burnt, result.overbaked, result.appropriate, result.underbaked],
                     backgroundColor: [burntColor, overbakedColor, appropriateColor, underbakedColor],
-                    borderColor: '#374151',
-                    borderWidth: 2,
-                    hoverOffset: 4
+                    borderColor: '#374151', borderWidth: 2, hoverOffset: 4
                 }]
             };
 
-            if (bakeChart) {
-                bakeChart.destroy();
-            }
-
-            bakeChart = new Chart(chartCanvas, {
-                type: 'doughnut',
-                data: data,
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: {
-                            position: 'top',
-                            labels: {
-                                color: '#d1d5db' // text-gray-300
-                            }
-                        }
-                    }
-                }
+            if (bakeChart) bakeChart.destroy();
+            bakeChart = new Chart(chartCanvas, { type: 'doughnut', data,
+                options: { responsive: true, plugins: { legend: { position: 'top', labels: { color: '#d1d5db' } } } }
             });
 
-            // Helper to determine text color based on background brightness
             const getTextColorForBg = (bgColor) => {
-                const [r, g, b] = bgColor.match(/\d+/g).map(Number);
-                const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-                return brightness > 125 ? '#1f2937' : '#f9fafb'; // dark text on light bg, white on dark
+                const [r,g,b] = bgColor.match(/\d+/g).map(Number);
+                return (r*299+g*587+b*114)/1000 > 125 ? '#1f2937' : '#f9fafb';
             };
-
-            const format = (label, value, color, text) => `
-                <div class="flex items-center justify-between p-2 rounded-md" style="background-color: ${color}; color: ${text};">
-                    <span class="font-semibold">${label}</span>
-                    <span class="font-bold">${value.toFixed(1)}%</span>
-                </div>`;
+            const format = (l, v, c, t) => `<div class="flex items-center justify-between p-2 rounded-md" style="background-color:${c};color:${t};"><span class="font-semibold">${l}</span><span class="font-bold">${v.toFixed(1)}%</span></div>`;
             
             percentageBreakdownEl.innerHTML = 
                 format('Burnt', result.burnt, burntColor, getTextColorForBg(burntColor)) +
@@ -379,19 +496,16 @@
                 format('Underbaked', result.underbaked, underbakedColor, getTextColorForBg(underbakedColor));
             
             let summary = 'Analysis complete.';
-            if (result.burnt > 2) {
-                summary = "High level of burnt area detected. Recommend review.";
-            } else if (result.overbaked > 15) {
-                summary = "Cracker is significantly overbaked in some areas.";
-            } else if (result.underbaked > 20) {
-                summary = "A large portion of the cracker is underbaked.";
-            } else if (result.appropriate > 70) {
-                summary = "Excellent bake consistency and distribution.";
-            }
+            if (result.burnt > 2) summary = "High level of burnt area detected. Recommend review.";
+            else if (result.overbaked > 15) summary = "Cracker is significantly overbaked in some areas.";
+            else if (result.underbaked > 20) summary = "A large portion of the cracker is underbaked.";
+            else if (result.appropriate > 70) summary = "Excellent bake consistency and distribution.";
             qualitativeSummaryEl.textContent = summary;
         }
+
+        // Initialize swatches on page load
+        updateSwatches();
     </script>
 </body>
 </html>
-
 
