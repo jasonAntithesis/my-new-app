@@ -54,12 +54,30 @@
             cursor: pointer;
             border-radius: 50%;
         }
-        #camera-modal {
+        #camera-modal, #crop-modal {
             background-color: rgba(0, 0, 0, 0.8);
         }
         #camera-video {
             transform: scaleX(-1); /* Mirror mode for user-facing camera */
         }
+        #crop-box {
+            position: absolute;
+            border: 2px dashed #14b8a6;
+            box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);
+            cursor: move;
+        }
+        .resize-handle {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background-color: #14b8a6;
+            border: 1px solid #f9fafb;
+            border-radius: 50%;
+        }
+        .resize-handle.nw { top: -5px; left: -5px; cursor: nwse-resize; }
+        .resize-handle.ne { top: -5px; right: -5px; cursor: nesw-resize; }
+        .resize-handle.sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+        .resize-handle.se { bottom: -5px; right: -5px; cursor: nwse-resize; }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
@@ -151,13 +169,26 @@
     <div id="camera-modal" class="fixed inset-0 z-50 flex-col items-center justify-center hidden">
          <div class="relative w-full max-w-lg">
             <video id="camera-video" class="w-full h-auto rounded-lg" autoplay playsinline></video>
-            <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div class="w-3/4 aspect-square border-4 border-dashed border-white/70 rounded-lg"></div>
-            </div>
-        </div>
+         </div>
         <button id="capture-button" class="mt-4 bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 px-6 rounded-full text-lg">Capture</button>
         <button id="close-camera" class="absolute top-4 right-4 text-white text-3xl">&times;</button>
     </div>
+
+    <!-- Crop Modal -->
+    <div id="crop-modal" class="fixed inset-0 z-50 flex-col items-center justify-center hidden p-4">
+        <div id="crop-container" class="relative max-w-lg w-full">
+            <img id="crop-image" class="w-full h-auto rounded-lg">
+            <div id="crop-box">
+                <div class="resize-handle nw"></div>
+                <div class="resize-handle ne"></div>
+                <div class="resize-handle sw"></div>
+                <div class="resize-handle se"></div>
+            </div>
+        </div>
+        <button id="confirm-crop-button" class="mt-4 bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 px-6 rounded-full text-lg">Confirm & Analyze</button>
+        <button id="close-crop-modal" class="absolute top-4 right-4 text-white text-3xl">&times;</button>
+    </div>
+
 
     <!-- Hidden canvas for image processing -->
     <canvas id="imageCanvas" class="hidden"></canvas>
@@ -190,6 +221,14 @@
         const captureButton = document.getElementById('capture-button');
         const closeCameraButton = document.getElementById('close-camera');
         let stream = null;
+        
+        // Crop Modal Elements
+        const cropModal = document.getElementById('crop-modal');
+        const cropImage = document.getElementById('crop-image');
+        const cropBox = document.getElementById('crop-box');
+        const confirmCropButton = document.getElementById('confirm-crop-button');
+        const closeCropModalButton = document.getElementById('close-crop-modal');
+        let originalImageForCrop = new Image();
 
         // Canvas and Chart
         const imageCanvas = document.getElementById('imageCanvas');
@@ -203,6 +242,8 @@
         crackerUpload.addEventListener('change', handleImageUpload);
         captureButton.addEventListener('click', capturePhoto);
         closeCameraButton.addEventListener('click', closeCamera);
+        confirmCropButton.addEventListener('click', performCropAndAnalyze);
+        closeCropModalButton.addEventListener('click', () => { cropModal.classList.add('hidden'); cropModal.classList.remove('flex'); });
         burntSlider.addEventListener('input', handleSliderChange);
         overbakedSlider.addEventListener('input', handleSliderChange);
         appropriateSlider.addEventListener('input', handleSliderChange);
@@ -245,44 +286,25 @@
         }
 
         function capturePhoto() {
-            const videoWidth = cameraVideo.videoWidth;
-            const videoHeight = cameraVideo.videoHeight;
-
-            // Crop to the center square, matching the 75% overlay
-            const cropSize = Math.min(videoWidth, videoHeight) * 0.75;
-            const sx = (videoWidth - cropSize) / 2;
-            const sy = (videoHeight - cropSize) / 2;
-
             const tempCanvas = document.createElement('canvas');
             const tempCtx = tempCanvas.getContext('2d');
-            
-            tempCanvas.width = cropSize;
-            tempCanvas.height = cropSize;
-
+            tempCanvas.width = cameraVideo.videoWidth;
+            tempCanvas.height = cameraVideo.videoHeight;
             if (cameraVideo.style.transform === 'scaleX(-1)') {
                 tempCtx.translate(tempCanvas.width, 0);
                 tempCtx.scale(-1, 1);
             }
-            
-            // Draw the cropped portion of the video
-            tempCtx.drawImage(
-                cameraVideo,
-                sx, sy,             // Source x, y
-                cropSize, cropSize, // Source width, height
-                0, 0,               // Destination x, y
-                cropSize, cropSize  // Destination width, height
-            );
-
+            tempCtx.drawImage(cameraVideo, 0, 0, tempCanvas.width, tempCanvas.height);
             const imageDataUrl = tempCanvas.toDataURL('image/png');
-            handleImageSrc(imageDataUrl);
             closeCamera();
+            initCropper(imageDataUrl);
         }
 
         function handleImageUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
             const reader = new FileReader();
-            reader.onload = e => handleImageSrc(e.target.result);
+            reader.onload = e => initCropper(e.target.result);
             reader.readAsDataURL(file);
         }
 
@@ -300,7 +322,6 @@
         function processImage(imageUrl) {
             const img = new Image();
             img.onload = () => {
-                // The image is already cropped, so we use its full dimensions
                 const maxDim = 400;
                 const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
                 imageCanvas.width = img.width * scale;
@@ -351,6 +372,138 @@
                 displayResults(analysisResult, thresholds);
             }
         }
+        
+        // --- Cropper Logic ---
+        function initCropper(imageSrc) {
+            originalImageForCrop.src = imageSrc;
+            originalImageForCrop.onload = () => {
+                cropImage.src = imageSrc;
+                cropModal.classList.remove('hidden');
+                cropModal.classList.add('flex');
+                
+                const container = document.getElementById('crop-container');
+                const imgWidth = container.offsetWidth;
+                const imgHeight = container.offsetHeight;
+                const boxSize = Math.min(imgWidth, imgHeight) * 0.75;
+
+                cropBox.style.width = `${boxSize}px`;
+                cropBox.style.height = `${boxSize}px`;
+                cropBox.style.top = `${(imgHeight - boxSize) / 2}px`;
+                cropBox.style.left = `${(imgWidth - boxSize) / 2}px`;
+            };
+        }
+
+        function performCropAndAnalyze() {
+            const scaleX = originalImageForCrop.naturalWidth / cropImage.offsetWidth;
+            const scaleY = originalImageForCrop.naturalHeight / cropImage.offsetHeight;
+
+            const cropX = parseFloat(cropBox.style.left) * scaleX;
+            const cropY = parseFloat(cropBox.style.top) * scaleY;
+            const cropWidth = parseFloat(cropBox.style.width) * scaleX;
+            const cropHeight = parseFloat(cropBox.style.height) * scaleY;
+
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCanvas.width = cropWidth;
+            tempCanvas.height = cropHeight;
+
+            tempCtx.drawImage(
+                originalImageForCrop,
+                cropX, cropY, cropWidth, cropHeight,
+                0, 0, cropWidth, cropHeight
+            );
+
+            const croppedImageUrl = tempCanvas.toDataURL('image/png');
+            cropModal.classList.add('hidden');
+            cropModal.classList.remove('flex');
+            handleImageSrc(croppedImageUrl);
+        }
+        
+        // --- Draggable/Resizable Crop Box ---
+        let currentResizer;
+        let isResizing = false;
+        let isDragging = false;
+        let startX, startY, startWidth, startHeight, startLeft, startTop;
+
+        cropBox.addEventListener('mousedown', startDrag);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', stopActions);
+
+        cropBox.addEventListener('touchstart', startDrag, { passive: false });
+        document.addEventListener('touchmove', drag, { passive: false });
+        document.addEventListener('touchend', stopActions);
+
+        Array.from(cropBox.getElementsByClassName('resize-handle')).forEach(handle => {
+            handle.addEventListener('mousedown', startResize);
+            handle.addEventListener('touchstart', startResize, { passive: false });
+        });
+
+        function startDrag(e) {
+            e.preventDefault();
+            isDragging = true;
+            startX = (e.clientX || e.touches[0].clientX);
+            startY = (e.clientY || e.touches[0].clientY);
+            startLeft = parseFloat(cropBox.style.left);
+            startTop = parseFloat(cropBox.style.top);
+        }
+
+        function startResize(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            isResizing = true;
+            currentResizer = e.target;
+            startX = (e.clientX || e.touches[0].clientX);
+            startY = (e.clientY || e.touches[0].clientY);
+            startWidth = parseFloat(cropBox.style.width);
+            startHeight = parseFloat(cropBox.style.height);
+            startLeft = parseFloat(cropBox.style.left);
+            startTop = parseFloat(cropBox.style.top);
+        }
+
+        function drag(e) {
+             if (!isDragging && !isResizing) return;
+            const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+            const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+            const dx = clientX - startX;
+            const dy = clientY - startY;
+
+            if (isResizing) {
+                const containerRect = cropImage.getBoundingClientRect();
+                let newWidth = startWidth, newHeight = startHeight, newLeft = startLeft, newTop = startTop;
+
+                if (currentResizer.classList.contains('se')) {
+                    newWidth = Math.min(startWidth + dx, containerRect.width - startLeft);
+                    newHeight = Math.min(startHeight + dy, containerRect.height - startTop);
+                } else if (currentResizer.classList.contains('sw')) {
+                    newWidth = Math.min(startWidth - dx, startLeft + startWidth);
+                    newLeft = Math.max(startLeft + dx, 0);
+                    newHeight = Math.min(startHeight + dy, containerRect.height - startTop);
+                } else if (currentResizer.classList.contains('ne')) {
+                    newWidth = Math.min(startWidth + dx, containerRect.width - startLeft);
+                    newHeight = Math.min(startHeight - dy, startTop + startHeight);
+                    newTop = Math.max(startTop + dy, 0);
+                } else if (currentResizer.classList.contains('nw')) {
+                    newWidth = Math.min(startWidth - dx, startLeft + startWidth);
+                    newLeft = Math.max(startLeft + dx, 0);
+                    newHeight = Math.min(startHeight - dy, startTop + startHeight);
+                    newTop = Math.max(startTop + dy, 0);
+                }
+                cropBox.style.width = `${newWidth}px`;
+                cropBox.style.height = `${newHeight}px`;
+                cropBox.style.left = `${newLeft}px`;
+                cropBox.style.top = `${newTop}px`;
+            } else if (isDragging) {
+                const newLeft = Math.max(0, Math.min(startLeft + dx, cropImage.offsetWidth - parseFloat(cropBox.style.width)));
+                const newTop = Math.max(0, Math.min(startTop + dy, cropImage.offsetHeight - parseFloat(cropBox.style.height)));
+                cropBox.style.left = `${newLeft}px`;
+                cropBox.style.top = `${newTop}px`;
+            }
+        }
+
+        function stopActions() {
+            isDragging = false;
+            isResizing = false;
+        }
 
         // --- Color Conversion Functions ---
         function labToRgb(l, a, b) {
@@ -400,39 +553,41 @@
         function segmentCracker(imageData) {
             const { data, width, height } = imageData;
             const backgroundMask = new Uint8Array(width * height).fill(0);
-            const q = [];
-            const tolerance = 60;
+            const tolerance = 55; 
 
-            const getColor = (x, y) => [data[(y*width+x)*4], data[(y*width+x)*4+1], data[(y*width+x)*4+2]];
-            const colorDist = (c1, c2) => Math.sqrt((c1[0]-c2[0])**2 + (c1[1]-c2[1])**2 + (c1[2]-c2[2])**2);
-
-            const startFloodFill = (x, y) => {
-                if (backgroundMask[y*width+x] === 1) return;
-                const startColor = getColor(x,y);
-                q.push([x,y]);
-                backgroundMask[y*width+x] = 1;
-                while(q.length > 0) {
-                    const [px, py] = q.shift();
-                    [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx, dy]) => {
-                        const nx = px+dx, ny = py+dy;
-                        if (nx>=0 && nx<width && ny>=0 && ny<height && backgroundMask[ny*width+nx] === 0) {
-                            if (colorDist(startColor, getColor(nx,ny)) < tolerance) {
-                                backgroundMask[ny*width+nx] = 1;
-                                q.push([nx,ny]);
-                            }
-                        }
-                    });
+            // 1. Find dominant color (assumed background)
+            const colorCounts = {};
+            let maxCount = 0;
+            let dominantColor = [0,0,0];
+            for (let i = 0; i < data.length; i += 4) {
+                // Quantize colors to reduce noise
+                const r = Math.floor(data[i] / 10) * 10;
+                const g = Math.floor(data[i+1] / 10) * 10;
+                const b = Math.floor(data[i+2] / 10) * 10;
+                const key = `${r},${g},${b}`;
+                colorCounts[key] = (colorCounts[key] || 0) + 1;
+                if (colorCounts[key] > maxCount) {
+                    maxCount = colorCounts[key];
+                    dominantColor = [r, g, b];
                 }
-            };
+            }
             
-            startFloodFill(0,0); startFloodFill(width-1, 0); startFloodFill(0, height-1); startFloodFill(width-1, height-1);
-            
+            // 2. Create mask based on learned background color
+            const colorDist = (c1, c2) => Math.sqrt((c1[0]-c2[0])**2 + (c1[1]-c2[1])**2 + (c1[2]-c2[2])**2);
+            for (let i = 0; i < data.length; i += 4) {
+                const pixelColor = [data[i], data[i+1], data[i+2]];
+                if (colorDist(pixelColor, dominantColor) < tolerance) {
+                    backgroundMask[i/4] = 1; // Mark as background
+                }
+            }
+
+            // 3. Collect cracker pixels and bounding box
             const crackerPixels = [];
             let minX=width, minY=height, maxX=0, maxY=0;
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
                     if (backgroundMask[y*width+x] === 0) {
-                        crackerPixels.push(getColor(x,y));
+                        crackerPixels.push([data[(y*width+x)*4], data[(y*width+x)*4+1], data[(y*width+x)*4+2]]);
                         minX=Math.min(minX,x); minY=Math.min(minY,y);
                         maxX=Math.max(maxX,x); maxY=Math.max(maxY,y);
                     }
@@ -445,16 +600,14 @@
         function analyzeBakeDistribution(imageData, thresholds) {
             const { crackerPixels, backgroundMask, minX, minY, maxX, maxY } = segmentCracker(imageData);
             
-            // --- Sanity Checks ---
-            if (crackerPixels.length < (imageData.width * imageData.height * 0.1)) {
+            if (crackerPixels.length < (imageData.width * imageData.height * 0.05)) { // Lowered threshold
                 return { error: "No cracker detected. Please try again on a plain background." };
             }
             const boxWidth = maxX - minX, boxHeight = maxY - minY;
             const aspectRatio = boxWidth / boxHeight;
-            if (aspectRatio < 0.5 || aspectRatio > 2.0) {
+            if (boxWidth > 0 && boxHeight > 0 && (aspectRatio < 0.5 || aspectRatio > 2.0)) {
                 return { error: "Object shape is not cracker-like. Please retake the photo."};
             }
-            // --- End Sanity Checks ---
 
             const segmentedImageUrl = createSegmentedImage(imageData, backgroundMask);
             let pixelCounts = { burnt: 0, overbaked: 0, appropriate: 0, underbaked: 0 };
